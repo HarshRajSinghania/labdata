@@ -7,7 +7,6 @@ env/
 *.pdf
 data/pubs/
 *.egg-info/
-uv.lock
 
 # Generated site data (built by labdata CLI)
 site/_data/lab.yml
