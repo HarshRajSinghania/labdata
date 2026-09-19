@@ -33,12 +33,11 @@ jobs:
     - name: Install uv
       uses: astral-sh/setup-uv@v3
       with:
-        version: latest
+        version: "0.12.15"
 
     - name: Install labdata
       run: |
-        uv venv
-        uv pip install -e .
+        uv sync --frozen --extra test
 
     - name: Generate site data
       run: uv run labdata --config lab.yaml --output site/_data/lab.yml
