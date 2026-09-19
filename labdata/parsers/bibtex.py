@@ -9,7 +9,10 @@ Author: Siddhartha Srinivasa <siddh@cs.washington.edu>
 MIT License - see LICENSE file for details.
 """
 
+import logging
 import re
+import sys
+from collections import OrderedDict
 from pathlib import Path
 from typing import List, Optional
 
@@ -21,12 +24,95 @@ from ..latex import replace_latex_accents, latex_to_markdown, latex_to_text
 from ..models import Author, Publication
 
 
+# BibTeX @string macros. Last definition wins (same rule as classic BibTeX
+# and bibtexparser v1). labdata reports redefinitions once per run instead
+# of forwarding one parser warning per overwrite.
+_STRING_MACRO_RE = re.compile(
+    r'(?im)^[ \t]*@string\s*\{\s*([A-Za-z][A-Za-z0-9_:-]*)'
+)
+_BIBTEXPARSER_LOGGER_NAMES = (
+    'bibtexparser',
+    'bibtexparser.bparser',
+    'bibtexparser.bwriter',
+)
+
+
+class _SuppressStringOverwriteFilter(logging.Filter):
+    """Drop bibtexparser's per-key overwrite logs so they do not leak."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return 'Overwriting existing string' not in msg
+
+
+def _scan_string_macros(path: str) -> list:
+    """Return (key, filename, lineno) for every @string in path."""
+    found = []
+    filename = Path(path).name
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            for lineno, line in enumerate(f, start=1):
+                match = _STRING_MACRO_RE.search(line)
+                if match:
+                    found.append((match.group(1), filename, lineno))
+    except OSError:
+        pass
+    return found
+
+
+def report_redefined_string_macros(bib_paths: list, stream=None) -> Optional[str]:
+    """Emit one summary if any @string key is defined more than once.
+
+    The last definition is the one used when expanding entries. Returns the
+    message when something was reported, otherwise None.
+    """
+    if stream is None:
+        stream = sys.stderr
+    occurrences = OrderedDict()
+    for path in bib_paths:
+        for key, filename, lineno in _scan_string_macros(path):
+            occurrences.setdefault(key, []).append(f'{filename}:{lineno}')
+    redefined = [(key, locs) for key, locs in occurrences.items() if len(locs) > 1]
+    if not redefined:
+        return None
+    keys = ', '.join(key for key, _ in redefined)
+    later_sites = []
+    seen = set()
+    for _, locs in redefined:
+        for loc in locs[1:]:
+            if loc not in seen:
+                seen.add(loc)
+                later_sites.append(loc)
+    sites = ', '.join(later_sites)
+    message = (
+        f'{len(redefined)} @string macros redefined (last definition used): '
+        f'{keys} [{sites}]'
+    )
+    print(message, file=stream)
+    return message
+
+
 def parse_bibtex_file(path: str) -> list:
-    """Parse a BibTeX file and return raw entry dicts."""
-    with open(path, 'r', encoding='utf-8') as f:
-        parser = BibTexParser(common_strings=True)
-        bib = bibtexparser.load(f, parser)
-    return bib.entries
+    """Parse a BibTeX file and return raw entry dicts.
+
+    bibtexparser v1 keeps the last @string definition for a key. Its own
+    per-key overwrite logs are filtered so callers see labdata's summary
+    instead (see report_redefined_string_macros).
+    """
+    filters = []
+    for name in _BIBTEXPARSER_LOGGER_NAMES:
+        logger = logging.getLogger(name)
+        filt = _SuppressStringOverwriteFilter()
+        logger.addFilter(filt)
+        filters.append((logger, filt))
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            parser = BibTexParser(common_strings=True)
+            parsed = bibtexparser.load(f, parser)
+        return parsed.entries
+    finally:
+        for logger, filt in filters:
+            logger.removeFilter(filt)
 
 
 def parse_author_list(raw_author_field: str) -> List[Author]:
@@ -269,14 +355,18 @@ def parse_all_publications(
         List of Publication objects, sorted by year descending
     """
     publications = []
+    paths = []
     for bib_file in bib_files:
         name = bib_file['name'] if isinstance(bib_file, dict) else bib_file.name
         category = bib_file['category'] if isinstance(bib_file, dict) else bib_file.category
         path = f"{bib_dir}/{name}"
+        paths.append(path)
         entries = parse_bibtex_file(path)
         for entry in entries:
             pub = entry_to_publication(entry, category, pdf_base_url)
             publications.append(pub)
+
+    report_redefined_string_macros(paths)
 
     publications.sort(key=lambda p: p.year, reverse=True)
     return publications

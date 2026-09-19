@@ -5,6 +5,7 @@ from pathlib import Path
 
 from labdata.parsers.bibtex import (
     parse_bibtex_file,
+    report_redefined_string_macros,
     parse_author_list,
     format_authors_string,
     format_venue,
@@ -251,3 +252,49 @@ class TestParseAllPublications:
         assert pubs[0].year >= pubs[-1].year
         # Check first pub has structured authors
         assert all(isinstance(a, Author) for a in pubs[0].authors)
+
+
+class TestRedefinedStringMacros:
+    """@string last-wins rule and single summary warning (#21)."""
+
+    def test_summary_for_three_redefinitions(self, capsys):
+        strings_dir = FIXTURES / "strings"
+        paths = [str(strings_dir / "strings.bib"), str(strings_dir / "unique.bib")]
+        message = report_redefined_string_macros(paths)
+        captured = capsys.readouterr()
+        assert message is not None
+        assert message in captured.err
+        assert captured.err.count("@string macros redefined") == 1
+        assert "3 @string macros redefined (last definition used):" in message
+        assert "cvpr" in message and "icra" in message and "rss" in message
+        assert "nips" not in message
+        assert "strings.bib:" in message
+        assert "Overwriting existing string" not in captured.err
+        assert "Overwriting existing string" not in captured.out
+
+    def test_no_message_when_macros_are_unique(self, capsys):
+        paths = [str(FIXTURES / "strings" / "unique.bib")]
+        message = report_redefined_string_macros(paths)
+        captured = capsys.readouterr()
+        assert message is None
+        assert captured.err == ""
+        assert "redefined" not in captured.out
+
+    def test_last_definition_is_used(self):
+        entries = parse_bibtex_file(str(FIXTURES / "strings" / "strings.bib"))
+        by_id = {e["ID"]: e for e in entries}
+        venue = by_id["demo2024cvpr"]["booktitle"]
+        assert venue == "IEEE/CVF Conference on Computer Vision and Pattern Recognition"
+        assert "short" not in venue
+
+    def test_parse_all_uses_labdata_summary(self, capsys):
+        pubs = parse_all_publications(
+            bib_dir=str(FIXTURES / "strings"),
+            bib_files=[{"name": "strings.bib", "category": "Conference Papers"}],
+        )
+        captured = capsys.readouterr()
+        assert len(pubs) == 1
+        assert "IEEE/CVF Conference on Computer Vision and Pattern Recognition" in pubs[0].venue
+        assert "short" not in pubs[0].venue
+        assert captured.err.count("@string macros redefined") == 1
+        assert "Overwriting existing string" not in captured.err
