@@ -92,6 +92,18 @@ Standard `.bib` files. labdata extracts the following standard BibTeX fields:
 
 All fields are also preserved in the copyable BibTeX button.
 
+### `@string` macros
+
+When a key is defined more than once with `@string{...}`, **the last definition wins**. That matches classic BibTeX and bibtexparser v1 (the parser labdata uses). labdata does not keep the first definition.
+
+Redefinitions are reported once per run as a single summary warning, for example:
+
+```
+3 @string macros redefined (last definition used): cvpr, icra, rss [strings.bib:12, confs.bib:4]
+```
+
+Macros that are defined only once produce no message. Parser-library log lines for individual overwrites are not shown.
+
 ### The `project` tag
 
 labdata introduces one custom BibTeX field: `project`. Add it to any entry to link that paper to a research project:
